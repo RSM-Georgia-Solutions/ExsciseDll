@@ -6,28 +6,13 @@ using System.Text;
 using System.Threading.Tasks;
 using SAPbobsCOM;
 using SAPbouiCOM;
-using Translator;
 using Company = SAPbobsCOM.Company;
 
 namespace ExciseDll
 {
     public class Excise
     {
-        private static string QueryHanaTransalte(string query, bool isHana)
-        {
-            if (isHana)
-            {
-                int numOfStatements;
-                int numOfErrors;
-                TranslatorTool translateTool = new TranslatorTool();
-                query = translateTool.TranslateQuery(query, out numOfStatements, out numOfErrors);
-                return query;
-            }
-            else
-            {
-                return query;
-            }
-        }
+        
 
         /// <summary>
         /// Returns Dictionary that contains about success of posting and log details in inner Dictionary
@@ -47,7 +32,7 @@ namespace ExciseDll
             Recordset recSetAct =
                 (Recordset)company.GetBusinessObject(BoObjectTypes
                     .BoRecordset);
-            recSetAct.DoQuery(QueryHanaTransalte($"Select * From [@RSM_EXCP]", isHana));
+            recSetAct.DoQuery($"Select * From [@RSM_EXCP]");
             string exciseAccount = recSetAct.Fields.Item("U_ExciseAcc").Value.ToString();
             string exciseAccountReturn = recSetAct.Fields.Item("U_ExciseAccReturn").Value.ToString();
 

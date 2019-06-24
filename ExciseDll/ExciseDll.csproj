@@ -30,12 +30,6 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="Antlr3.Runtime">
-      <HintPath>..\..\..\..\..\Desktop\SQLConverter1\x64\Antlr3.Runtime.dll</HintPath>
-    </Reference>
-    <Reference Include="ConverterLib_x64">
-      <HintPath>..\..\Invoice Income Correction\Invoice Income Correction\bin\Debug\ConverterLib_x64.dll</HintPath>
-    </Reference>
     <Reference Include="SAPBusinessOneSDK, Version=1.0.0.1, Culture=neutral, PublicKeyToken=c7c3cb60e45d119f, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>C:\Program Files (x86)\SAP\SAP Business One SDK\Lib\SAPBusinessOneSDK.dll</HintPath>
