@@ -137,16 +137,15 @@ namespace ExciseDll
         public static Dictionary<bool, Dictionary<string, List<string>>> CreateExciseEntryForCreditMemo(Company company, int invoiceDocEntry)
         {
             bool isHana = company.DbServerType.ToString() == "dst_HANADB";
-            Documents invoice = (Documents)company.GetBusinessObject(BoObjectTypes.oInvoices);
+            Documents invoice = (Documents)company.GetBusinessObject(BoObjectTypes.oCreditNotes);
             invoice.GetByKey(invoiceDocEntry);
             Recordset recSetAct = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
             recSetAct.DoQuery(QueryHanaTransalte($"Select * From [@RSM_EXCP]", isHana));
-            string exciseAccount = recSetAct.Fields.Item("U_ExciseAcc").Value.ToString();
             string exciseAccountReturn = recSetAct.Fields.Item("U_ExciseAccReturn").Value.ToString();
 
             var x = new List<string>() { "აქციზის ანგარიში არ არის განსაზღვრული" };
 
-            if (string.IsNullOrWhiteSpace(exciseAccount))
+            if (string.IsNullOrWhiteSpace(exciseAccountReturn))
             {
                 return new Dictionary<bool, Dictionary<string, List<string>>>
                 {
@@ -223,7 +222,7 @@ namespace ExciseDll
                 var roundAccuracy = company.GetCompanyService().GetAdminInfo().TotalsAccuracy;
                 double fullExcise = Math.Round(invoice.Lines.Quantity * excise, roundAccuracy);
 
-                string resultJdt = AddJournalEntryCredit(company, exciseAccount, glRevenueAccount, -fullExcise, invoice.Series,
+                string resultJdt = AddJournalEntryCredit(company, exciseAccountReturn, glRevenueAccount, -fullExcise, invoice.Series,
                    "CR" + invoice.DocNum + " " + invoice.Lines.ItemCode, "", invoice.DocDate, invoice.BPL_IDAssignedToInvoice, invoice.DocCurrency);
 
                 if (res.ContainsKey(invoice.Lines.ItemCode))
