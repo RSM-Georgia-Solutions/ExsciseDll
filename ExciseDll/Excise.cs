@@ -9,241 +9,86 @@ namespace ExciseDll
 {
     public class Excise
     {
-        private static string QueryHanaTransalte(string query, bool isHana)
-        {
-            if (isHana)
-            {
-                int numOfStatements;
-                int numOfErrors;
-                TranslatorTool translateTool = new TranslatorTool();
-                query = translateTool.TranslateQuery(query, out numOfStatements, out numOfErrors);
-                return query;
-            }
-            return query;
-        }
-
         /// <summary>
         /// Returns Dictionary that contains about success of posting and log details in inner Dictionary
         /// </summary>
         /// <param name="company"></param>
         /// <param name="invoiceDocEntry"></param>
+        /// <param name="objectTypes"></param>
         /// <returns></returns>
-        public static Dictionary<bool, Dictionary<string, List<string>>> CreateExciseEntryForInovice(Company company, int invoiceDocEntry)
+        public static Dictionary<bool, Dictionary<string, List<string>>> CreateExciseEntry(Company company, int invoiceDocEntry, BoObjectTypes objectTypes)
         {
-            bool isHana = company.DbServerType.ToString() == "dst_HANADB";
-            Documents invoice = (Documents)company.GetBusinessObject(BoObjectTypes.oInvoices);
-            invoice.GetByKey(invoiceDocEntry);
+            string tableHeader = objectTypes == BoObjectTypes.oInvoices ? "OINV" : "OPCH";
+            string tableRow = objectTypes == BoObjectTypes.oInvoices ? "INV1" : "PCH1";
+
             Recordset recSetAct = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-            recSetAct.DoQuery(QueryHanaTransalte($"Select * From [@RSM_EXCP]", isHana));
+            recSetAct.DoQuery($"Select * From [@RSM_EXCP]");
             string exciseAccount = recSetAct.Fields.Item("U_ExciseAcc").Value.ToString();
             string exciseAccountReturn = recSetAct.Fields.Item("U_ExciseAccReturn").Value.ToString();
+            var roundAccuracy = company.GetCompanyService().GetAdminInfo().TotalsAccuracy;
+            Recordset recSet2 = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
 
-            var x = new List<string>() { "აქციზის ანგარიში არ არის განსაზღვრული" };
-
-            if (string.IsNullOrWhiteSpace(exciseAccount))
-            {
-                return new Dictionary<bool, Dictionary<string, List<string>>>
-                {
-                    { false, new Dictionary<string, List<string>> { { invoiceDocEntry.ToString(), new List<string> { "აქციზის ანგარიში არ არის განსაზღვრული" } } } }
-                };
-            }
-
-            if (invoice.DocCurrency != "GEL")
-            {
-                return new Dictionary<bool, Dictionary<string, List<string>>>
-                {
-                    { true, new Dictionary<string, List<string>> { { invoiceDocEntry.ToString(), new List<string> { "Currency Must Be GEL" } } } }
-                };
-            }
+            recSet2.DoQuery($@"SELECT {tableRow}.AcctCode, 
+       U_EXCISE, 
+       ROUND({tableRow}.Quantity * U_EXCISE,{roundAccuracy}) AS 'ExciseAmount', 
+       {tableHeader}.Series, 
+       {tableHeader}.DocNum, 
+       {tableRow}.ItemCode, 
+       {tableHeader}.DocDate, 
+       {tableHeader}.BPLId, 
+       {tableHeader}.DocCur
+FROM {tableHeader}
+     JOIN {tableRow} ON {tableHeader}.DocEntry = {tableRow}.DocEntry
+     JOIN OITM ON OITM.ItemCode = {tableRow}.ItemCode
+WHERE {tableHeader}.DocEntry = 1
+      AND DocCur = 'GEL'
+      AND OITM.U_EXCISE != 0
+      AND {tableRow}.Quantity != 0
+      AND {tableHeader}.DocType = 'I'
+      AND OITM.ItemType = 'I'");
 
             Dictionary<string, List<string>> res = new Dictionary<string, List<string>>();
-            for (int i = 0; i < invoice.Lines.Count; i++)
+            while (!recSet2.EoF)
             {
-                invoice.Lines.SetCurrentLine(i);
-                string glRevenueAccount = invoice.Lines.AccountCode;
-                SAPbobsCOM.Items item = (SAPbobsCOM.Items)company.GetBusinessObject(BoObjectTypes.oItems);
-                item.GetByKey(invoice.Lines.ItemCode);
-                string exciseString = string.Empty;
-                try
+                string glRevenueAccount = recSet2.Fields.Item("AcctCode").Value.ToString();
+                double fullExcise = (double)recSet2.Fields.Item("ExciseAmount").Value;
+                int resultJdt = 0;
+                if (objectTypes == BoObjectTypes.oInvoices)
                 {
-                    exciseString = item.UserFields.Fields.Item("U_Excise").Value.ToString();
+                    resultJdt = AddJournalEntryCredit(company,
+                        exciseAccount,
+                        glRevenueAccount,
+                        fullExcise,
+                        (int)recSet2.Fields.Item("AcctCode").Value,
+                        "IN" + recSet2.Fields.Item("DocNum").Value + " " + recSet2.Fields.Item("ItemCode").Value,
+                        "",
+                        DateTime.Parse(recSet2.Fields.Item("DocDate").Value.ToString(), CultureInfo.InvariantCulture),
+                        (int)recSet2.Fields.Item("BPLId").Value);
                 }
-                catch (Exception)
+                else if (objectTypes == BoObjectTypes.oCreditNotes)
                 {
-                    if (res.ContainsKey(invoice.Lines.ItemCode))
-                    {
-                        res[invoice.Lines.ItemCode].Add("Excise UDF დასამატებელია");
-                        return new Dictionary<bool, Dictionary<string, List<string>>>
-                        {
-                            { false, res }
-                        };
-                    }
-                    res.Add(invoice.Lines.ItemCode, new List<string> { "Excise UDF დასამატებელია" });
-                    return new Dictionary<bool, Dictionary<string, List<string>>>
-                    {
-                        { false, res }
-                    };
+                    resultJdt = AddJournalEntryCredit(company,
+                        exciseAccountReturn,
+                        glRevenueAccount,
+                        -fullExcise,
+                        (int)recSet2.Fields.Item("AcctCode").Value,
+                        "CR" + recSet2.Fields.Item("DocNum").Value + " " + recSet2.Fields.Item("ItemCode").Value,
+                        "",
+                        DateTime.Parse(recSet2.Fields.Item("DocDate").Value.ToString(), CultureInfo.InvariantCulture),
+                        (int)recSet2.Fields.Item("BPLId").Value);
                 }
-
-                double excise = double.Parse(exciseString, CultureInfo.InvariantCulture);
-
-                if (string.IsNullOrWhiteSpace(exciseString) || excise == 0)
-                {
-                    if (res.ContainsKey(invoice.Lines.ItemCode))
-                    {
-                        res[invoice.Lines.ItemCode].Add("საქონელზე აქციზის განაკვეთი არ არის მითითებული");
-                    }
-                    else
-                    {
-                        res.Add(invoice.Lines.ItemCode, new List<string> { "საქონელზე აქციზის განაკვეთი არ არის მითითებული" });
-                    }
-                    continue;
-                }
-
-
-                if (invoice.Lines.Quantity == 0)
-                {
-                    if (res.ContainsKey(invoice.Lines.ItemCode))
-                    {
-                        res[invoice.Lines.ItemCode].Add("საქონლის რაოდენობა უდრის 0");
-                    }
-                    else
-                    {
-                        res.Add(invoice.Lines.ItemCode, new List<string> { "საქონლის რაოდენობა უდრის 0" });
-                    }
-                    continue;
-                }
-
-                var roundAccuracy = company.GetCompanyService().GetAdminInfo().TotalsAccuracy;
-                double fullExcise = Math.Round(invoice.Lines.Quantity * excise, roundAccuracy);
-
-                string resultJdt = AddJournalEntryCredit(company, exciseAccount, glRevenueAccount, fullExcise, invoice.Series,
-                   "IN" + invoice.DocNum + " " + invoice.Lines.ItemCode, "", invoice.DocDate, invoice.BPL_IDAssignedToInvoice, invoice.DocCurrency);
-
-                if (res.ContainsKey(invoice.Lines.ItemCode))
-                {
-                    res[invoice.Lines.ItemCode].Add(resultJdt);
-                }
-                else
-                {
-                    res.Add(invoice.Lines.ItemCode, new List<string> { resultJdt });
-                }
-
+                recSet2.MoveNext();
             }
+
             return new Dictionary<bool, Dictionary<string, List<string>>> { { true, res } };
 
         }
 
-        public static Dictionary<bool, Dictionary<string, List<string>>> CreateExciseEntryForCreditMemo(Company company, int invoiceDocEntry)
-        {
-            bool isHana = company.DbServerType.ToString() == "dst_HANADB";
-            Documents invoice = (Documents)company.GetBusinessObject(BoObjectTypes.oCreditNotes);
-            invoice.GetByKey(invoiceDocEntry);
-            Recordset recSetAct = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-            recSetAct.DoQuery(QueryHanaTransalte($"Select * From [@RSM_EXCP]", isHana));
-            string exciseAccountReturn = recSetAct.Fields.Item("U_ExciseAccReturn").Value.ToString();
-
-            var x = new List<string>() { "აქციზის ანგარიში არ არის განსაზღვრული" };
-
-            if (string.IsNullOrWhiteSpace(exciseAccountReturn))
-            {
-                return new Dictionary<bool, Dictionary<string, List<string>>>
-                {
-                    { false, new Dictionary<string, List<string>> { { invoiceDocEntry.ToString(), new List<string> { "აქციზის ანგარიში არ არის განსაზღვრული" } } } }
-                };
-            }
-
-            if (invoice.DocCurrency != "GEL")
-            {
-                return new Dictionary<bool, Dictionary<string, List<string>>>
-                {
-                    { true, new Dictionary<string, List<string>> { { invoiceDocEntry.ToString(), new List<string> { "Currency Must Be GEL" } } } }
-                };
-            }
-
-            Dictionary<string, List<string>> res = new Dictionary<string, List<string>>();
-            for (int i = 0; i < invoice.Lines.Count; i++)
-            {
-                invoice.Lines.SetCurrentLine(i);
-                string glRevenueAccount = invoice.Lines.AccountCode;
-                Items item = (Items)company.GetBusinessObject(BoObjectTypes.oItems);
-                item.GetByKey(invoice.Lines.ItemCode);
-                string exciseString = string.Empty;
-                try
-                {
-                    exciseString = item.UserFields.Fields.Item("U_Excise").Value.ToString();
-                }
-                catch (Exception)
-                {
-                    if (res.ContainsKey(invoice.Lines.ItemCode))
-                    {
-                        res[invoice.Lines.ItemCode].Add("Excise UDF დასამატებელია");
-                        return new Dictionary<bool, Dictionary<string, List<string>>>
-                        {
-                            { false, res }
-                        };
-                    }
-                    res.Add(invoice.Lines.ItemCode, new List<string> { "Excise UDF დასამატებელია" });
-                    return new Dictionary<bool, Dictionary<string, List<string>>>
-                    {
-                        { false, res }
-                    };
-                }
-
-                double excise = double.Parse(exciseString, CultureInfo.InvariantCulture);
-
-                if (string.IsNullOrWhiteSpace(exciseString) || excise == 0)
-                {
-                    if (res.ContainsKey(invoice.Lines.ItemCode))
-                    {
-                        res[invoice.Lines.ItemCode].Add("საქონელზე აქციზის განაკვეთი არ არის მითითებული");
-                    }
-                    else
-                    {
-                        res.Add(invoice.Lines.ItemCode, new List<string> { "საქონელზე აქციზის განაკვეთი არ არის მითითებული" });
-                    }
-                    continue;
-                }
-
-
-                if (invoice.Lines.Quantity == 0)
-                {
-                    if (res.ContainsKey(invoice.Lines.ItemCode))
-                    {
-                        res[invoice.Lines.ItemCode].Add("საქონლის რაოდენობა უდრის 0");
-                    }
-                    else
-                    {
-                        res.Add(invoice.Lines.ItemCode, new List<string> { "საქონლის რაოდენობა უდრის 0" });
-                    }
-                    continue;
-                }
-
-                var roundAccuracy = company.GetCompanyService().GetAdminInfo().TotalsAccuracy;
-                double fullExcise = Math.Round(invoice.Lines.Quantity * excise, roundAccuracy);
-
-                string resultJdt = AddJournalEntryCredit(company, exciseAccountReturn, glRevenueAccount, -fullExcise, invoice.Series,
-                   "CR" + invoice.DocNum + " " + invoice.Lines.ItemCode, "", invoice.DocDate, invoice.BPL_IDAssignedToInvoice, invoice.DocCurrency);
-
-                if (res.ContainsKey(invoice.Lines.ItemCode))
-                {
-                    res[invoice.Lines.ItemCode].Add(resultJdt);
-                }
-                else
-                {
-                    res.Add(invoice.Lines.ItemCode, new List<string> { resultJdt });
-                }
-
-            }
-            return new Dictionary<bool, Dictionary<string, List<string>>> { { true, res } };
-
-        }
-
-        public static string AddJournalEntryCredit(SAPbobsCOM.Company _comp, string creditCode, string debitCode,
+        public static int AddJournalEntryCredit(Company _comp, string creditCode, string debitCode,
             double amount, int series, string comment, string code, DateTime DocDate, int BPLID = 235, string currency = "GEL")
         {
-            SAPbobsCOM.JournalEntries vJE =
-                (SAPbobsCOM.JournalEntries)_comp.GetBusinessObject(SAPbobsCOM.BoObjectTypes.oJournalEntries);
+            JournalEntries vJE =
+                (JournalEntries)_comp.GetBusinessObject(BoObjectTypes.oJournalEntries);
 
             vJE.ReferenceDate = DocDate;
             vJE.DueDate = DocDate;
@@ -287,16 +132,8 @@ namespace ExciseDll
 
             vJE.Lines.Add();
 
-            int i = vJE.Add();
-            if (i == 0)
-            {
-                string transId = _comp.GetNewObjectKey();
-                return transId;
-            }
-            else
-            {
-                throw new Exception(_comp.GetLastErrorDescription());
-            }
+            return vJE.Add();
+
         }
 
     }
