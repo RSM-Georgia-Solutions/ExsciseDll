@@ -1,8 +1,6 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Globalization;
 using SAPbobsCOM;
-using Translator;
 using Company = SAPbobsCOM.Company;
 
 namespace ExciseDll
@@ -16,50 +14,56 @@ namespace ExciseDll
         /// <param name="invoiceDocEntry"></param>
         /// <param name="objectTypes"></param>
         /// <returns></returns>
-        public static Dictionary<bool, Dictionary<string, List<string>>> CreateExciseEntry(Company company, int invoiceDocEntry, BoObjectTypes objectTypes)
+        public static int CreateExciseEntry(Company company, int invoiceDocEntry, BoObjectTypes objectTypes)
         {
             string tableHeader = objectTypes == BoObjectTypes.oInvoices ? "OINV" : "OPCH";
             string tableRow = objectTypes == BoObjectTypes.oInvoices ? "INV1" : "PCH1";
-
-            Recordset recSetAct = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
-            recSetAct.DoQuery($"Select * From [@RSM_EXCP]");
-            string exciseAccount = recSetAct.Fields.Item("U_ExciseAcc").Value.ToString();
-            string exciseAccountReturn = recSetAct.Fields.Item("U_ExciseAccReturn").Value.ToString();
             var roundAccuracy = company.GetCompanyService().GetAdminInfo().TotalsAccuracy;
+
             Recordset recSet2 = (Recordset)company.GetBusinessObject(BoObjectTypes.BoRecordset);
+            recSet2.DoQuery($"Select * From [@RSM_EXCP]");
+            string exciseAccount = recSet2.Fields.Item("U_ExciseAcc").Value.ToString();
+            string exciseAccountReturn = recSet2.Fields.Item("U_ExciseAccReturn").Value.ToString();
 
             recSet2.DoQuery($@"SELECT {tableRow}.AcctCode, 
-       U_EXCISE, 
-       ROUND({tableRow}.Quantity * U_EXCISE,{roundAccuracy}) AS 'ExciseAmount', 
-       {tableHeader}.Series, 
-       {tableHeader}.DocNum, 
-       {tableRow}.ItemCode, 
-       {tableHeader}.DocDate, 
-       {tableHeader}.BPLId, 
-       {tableHeader}.DocCur
-FROM {tableHeader}
-     JOIN {tableRow} ON {tableHeader}.DocEntry = {tableRow}.DocEntry
-     JOIN OITM ON OITM.ItemCode = {tableRow}.ItemCode
-WHERE {tableHeader}.DocEntry = 1
-      AND DocCur = 'GEL'
-      AND OITM.U_EXCISE != 0
-      AND {tableRow}.Quantity != 0
-      AND {tableHeader}.DocType = 'I'
-      AND OITM.ItemType = 'I'");
+                   U_EXCISE, 
+                   ROUND({tableRow}.Quantity * U_EXCISE,{roundAccuracy}) AS 'ExciseAmount', 
+                   {tableHeader}.Series, 
+                   {tableHeader}.DocNum, 
+                   {tableRow}.ItemCode, 
+                   {tableHeader}.DocDate, 
+                   {tableHeader}.BPLId, 
+                   {tableHeader}.DocCur
+            FROM {tableHeader}
+                 JOIN {tableRow} ON {tableHeader}.DocEntry = {tableRow}.DocEntry
+                 JOIN OITM ON OITM.ItemCode = {tableRow}.ItemCode
+            WHERE {tableHeader}.DocEntry = 1
+                  AND DocCur = 'GEL'
+                  AND OITM.U_EXCISE != 0
+                  AND {tableRow}.Quantity != 0
+                  AND {tableHeader}.DocType = 'I'
+                  AND OITM.ItemType = 'I'");
 
-            Dictionary<string, List<string>> res = new Dictionary<string, List<string>>();
+            int resultJdt = 0;
+
+
             while (!recSet2.EoF)
             {
-                string glRevenueAccount = recSet2.Fields.Item("AcctCode").Value.ToString();
                 double fullExcise = (double)recSet2.Fields.Item("ExciseAmount").Value;
-                int resultJdt = 0;
+
+                var AcctCode = (string)recSet2.Fields.Item("AcctCode").Value;
+                var Series = (int)recSet2.Fields.Item("Series").Value;
+                var DocNum =  "IN" + recSet2.Fields.Item("DocNum").Value + " " + recSet2.Fields.Item("ItemCode").Value;
+                var DocDate = DateTime.Parse(recSet2.Fields.Item("DocDate").Value.ToString(), CultureInfo.InvariantCulture);
+                var BPLId = (int)recSet2.Fields.Item("BPLId").Value;
+
                 if (objectTypes == BoObjectTypes.oInvoices)
                 {
                     resultJdt = AddJournalEntryCredit(company,
                         exciseAccount,
-                        glRevenueAccount,
-                        fullExcise,
-                        (int)recSet2.Fields.Item("AcctCode").Value,
+                        AcctCode,
+                        fullExcise, 
+                        Series,
                         "IN" + recSet2.Fields.Item("DocNum").Value + " " + recSet2.Fields.Item("ItemCode").Value,
                         "",
                         DateTime.Parse(recSet2.Fields.Item("DocDate").Value.ToString(), CultureInfo.InvariantCulture),
@@ -69,9 +73,9 @@ WHERE {tableHeader}.DocEntry = 1
                 {
                     resultJdt = AddJournalEntryCredit(company,
                         exciseAccountReturn,
-                        glRevenueAccount,
+                        AcctCode,
                         -fullExcise,
-                        (int)recSet2.Fields.Item("AcctCode").Value,
+                        Series,
                         "CR" + recSet2.Fields.Item("DocNum").Value + " " + recSet2.Fields.Item("ItemCode").Value,
                         "",
                         DateTime.Parse(recSet2.Fields.Item("DocDate").Value.ToString(), CultureInfo.InvariantCulture),
@@ -80,7 +84,7 @@ WHERE {tableHeader}.DocEntry = 1
                 recSet2.MoveNext();
             }
 
-            return new Dictionary<bool, Dictionary<string, List<string>>> { { true, res } };
+            return resultJdt;
 
         }
 
